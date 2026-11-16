@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simulador FB vs FB+FF · Banco de flotación de 3 celdas</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <!-- Chart.js 4.4.1 incluido localmente (funciona sin internet) -->
+  <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>Control de nivel · Banco de flotación de 3 celdas en serie</h1>
+    <p class="ref">PI + Feedforward con bombas peristálticas · Quintanilla et&nbsp;al., MethodsX 10 (2023) 102081</p>
+  </div>
+  <div class="status">
+    <span class="pill" id="statusPill">Detenido</span>
+    <span class="clock">t = <b id="simTime">0</b> s</span>
+  </div>
+</header>
+
+<section class="toolbar">
+  <div class="seg" id="modeSeg" role="tablist" aria-label="Modo de visualización">
+    <button data-mode="compare" class="active">Comparativo</button>
+    <button data-mode="fb">Solo Feedback (PI)</button>
+    <button data-mode="ff">Feedback + Feedforward</button>
+  </div>
+  <div class="actions">
+    <button id="btnPlay" class="primary">▶ Iniciar</button>
+    <button id="btnReset">↺ Reiniciar</button>
+    <button id="btnArticle" title="Setpoints y alimentación de la Fig. 14; escalón de setpoint en t = 180 s">📄 Escenario del artículo</button>
+    <button id="btnBatch" title="Calcula los 600 s del experimento de la Fig. 14 de una vez">⚡ Experimento 600 s instantáneo</button>
+  </div>
+  <div class="speed">
+    <label for="speed">Velocidad <b id="speedVal">×5</b></label>
+    <input type="range" id="speed" min="1" max="60" value="5">
+    <label for="windowSel">Ventana</label>
+    <select id="windowSel">
+      <option value="300">300 s</option>
+      <option value="600" selected>600 s</option>
+      <option value="1200">1200 s</option>
+      <option value="0">Todo</option>
+    </select>
+  </div>
+</section>
+
+<main class="layout">
+  <!-- ============================== PANEL DE CONTROL ============================== -->
+  <aside class="panel">
+    <details open>
+      <summary>Setpoints de nivel</summary>
+      <div id="spControls"></div>
+      <p class="hint" id="spHint"></p>
+    </details>
+
+    <details open>
+      <summary>Alimentación y perturbaciones</summary>
+      <div class="row">
+        <label>Q<sub>feed</sub> base <b id="feedVal"></b></label>
+        <input type="range" id="feed" min="0" max="95" step="0.5">
+      </div>
+      <div class="row inline">
+        <label for="stepAmp">Escalón</label>
+        <input type="number" id="stepAmp" value="10" step="1" min="0">
+        <button id="btnStepUp" class="small">+ Escalón</button>
+        <button id="btnStepDn" class="small">− Escalón</button>
+      </div>
+      <div class="row inline">
+        <label class="check"><input type="checkbox" id="randOn"> Perturbación aleatoria</label>
+      </div>
+      <div class="row inline">
+        <label for="randAmp">±Amplitud</label>
+        <input type="number" id="randAmp" value="15" step="1" min="0">
+        <label for="randPer">Período [s]</label>
+        <input type="number" id="randPer" value="30" step="1" min="1">
+      </div>
+      <p class="hint">Unidades de caudal como en el artículo («lpm»). Toda perturbación entra por la bomba de alimentación P-4 y se propaga aguas abajo por los relaves (Fig. 15).</p>
+    </details>
+
+    <details open>
+      <summary>Controladores PI + FF (Ecs. 7–8)</summary>
+      <table class="ptable" id="ctrlTable">
+        <thead><tr><th></th><th>Celda 1</th><th>Celda 2</th><th>Celda 3</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row inline">
+        <label for="ctrlForm">Implementación</label>
+        <select id="ctrlForm">
+          <option value="velocity">Incremental (velocidad)</option>
+          <option value="positional">Posicional (Ec. 7 literal)</option>
+        </select>
+      </div>
+      <div class="row inline">
+        <button id="btnTuneFinal" class="small">Tabla 2: finales</button>
+        <button id="btnTuneSimc" class="small">Tabla 2: iniciales SIMC</button>
+      </div>
+      <p class="hint">Kc &lt; 0: si el nivel supera el setpoint, aumenta el caudal de relaves. En forma posicional, Kff·ΔQ solo actúa durante el muestreo del cambio; en forma incremental, el efecto se acumula (feedforward estático).</p>
+    </details>
+
+    <details>
+      <summary>Planta e instrumentación</summary>
+      <table class="ptable" id="plantTable">
+        <thead><tr><th></th><th>Celda 1</th><th>Celda 2</th><th>Celda 3</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row">
+        <label>Aire Q<sub>air</sub> <b id="airVal"></b></label>
+        <input type="range" id="air" min="0" max="80" step="1">
+      </div>
+      <div class="row inline">
+        <label class="check"><input type="checkbox" id="noiseOn" checked> Ruido de sensor</label>
+        <label for="noiseStd">σ [cm]</label>
+        <input type="number" id="noiseStd" step="0.05" min="0">
+      </div>
+      <div class="row inline">
+        <label for="medWin">Mediana (medfilt1) [muestras]</label>
+        <input type="number" id="medWin" step="1" min="1" max="60">
+      </div>
+      <div class="row inline">
+        <label for="bitsMax">Bits máx. bomba</label>
+        <input type="number" id="bitsMax" step="500" min="1000" max="32767">
+      </div>
+      <p class="hint">Modelo G<sub>p</sub>(s) = k′e<sup>−θs</sup>/s (Tabla 2). Los niveles se leen como INT de 16 bits con la Fig. 11, y los comandos de bomba se escriben como INT con la Fig. 9. El ruido escala con j<sub>g</sub>.</p>
+    </details>
+  </aside>
+
+  <!-- ============================== VISUALIZACIÓN ============================== -->
+  <section class="content">
+    <div class="card tanks-card">
+      <div class="card-head">
+        <h2>Banco de celdas</h2>
+        <span class="legend-inline"><i class="sw sp"></i> setpoint <i class="sw fbc"></i> FB <i class="sw ffc"></i> FB+FF</span>
+      </div>
+      <div id="tanksWrap"></div>
+    </div>
+
+    <div class="iae-grid" id="iaeGrid"></div>
+
+    <div class="charts" id="charts"></div>
+  </section>
+</main>
+
+<footer class="foot">
+  Simulación basada en el modelo, las calibraciones y la sintonía publicados. T<sub>s</sub> = 1 s · IAE = ∫|e|dt (Ec. 9) sobre el nivel filtrado.
+</footer>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
